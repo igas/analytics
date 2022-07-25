@@ -1,6 +1,7 @@
 defmodule Plausible.Google.ApiTest do
   use Plausible.DataCase, async: true
   alias Plausible.Google.Api
+  alias Plausible.HTTPClient
   import Plausible.TestUtils
   import Double
 
@@ -27,10 +28,10 @@ defmodule Plausible.Google.ApiTest do
     setup [:create_user, :create_new_site]
 
     test "will fetch and persist import data from Google Analytics", %{site: site} do
-      httpoison =
-        HTTPoison
-        |> stub(:post, fn _url, _body, _headers, _opts ->
-          {:ok, %HTTPoison.Response{status_code: 200, body: @ok_response}}
+      http_client =
+        HTTPClient
+        |> stub(:post, fn _url, _headers, _params ->
+          {:ok, %Finch.Response{status: 200, body: @ok_response}}
         end)
 
       request = %{
@@ -43,28 +44,28 @@ defmodule Plausible.Google.ApiTest do
         page_token: nil
       }
 
-      Api.fetch_and_persist(site, request, http_client: httpoison, sleep_time: 0)
+      Api.fetch_and_persist(site, request, http_client: http_client, sleep_time: 0)
 
       assert imported_visitor_count(site) == 1
     end
 
     test "retries HTTP request up to 5 times before raising the last error", %{site: site} do
       httpoison =
-        HTTPoison
-        |> stub(:post, fn _url, _body, _headers, _opts ->
-          {:error, %HTTPoison.Error{reason: :nxdomain}}
+        HTTPClient
+        |> stub(:post, fn _url, _headers, _body ->
+          {:error, %Mint.TransportError{reason: :nxdomain}}
         end)
-        |> stub(:post, fn _url, _body, _headers, _opts ->
-          {:error, %HTTPoison.Error{reason: :timeout}}
+        |> stub(:post, fn _url, _headers, _body ->
+          {:error, %Mint.TransportError{reason: :timeout}}
         end)
-        |> stub(:post, fn _url, _body, _headers, _opts ->
-          {:error, %HTTPoison.Error{reason: :closed}}
+        |> stub(:post, fn _url, _headers, _body ->
+          {:error, %Mint.TransportError{reason: :closed}}
         end)
-        |> stub(:post, fn _url, _body, _headers, _opts ->
-          {:ok, %HTTPoison.Response{status_code: 503}}
+        |> stub(:post, fn _url, _headers, _body ->
+          {:ok, %Finch.Response{status: 503}}
         end)
-        |> stub(:post, fn _url, _body, _headers, _opts ->
-          {:ok, %HTTPoison.Response{status_code: 502}}
+        |> stub(:post, fn _url, _headers, _body ->
+          {:ok, %Finch.Response{status: 502}}
         end)
 
       request = %{
@@ -80,21 +81,21 @@ defmodule Plausible.Google.ApiTest do
         Api.fetch_and_persist(site, request, http_client: httpoison, sleep_time: 0)
       end
 
-      assert_receive({HTTPoison, :post, [_, _, _, _]})
-      assert_receive({HTTPoison, :post, [_, _, _, _]})
-      assert_receive({HTTPoison, :post, [_, _, _, _]})
-      assert_receive({HTTPoison, :post, [_, _, _, _]})
-      assert_receive({HTTPoison, :post, [_, _, _, _]})
+      assert_receive({Plausible.HTTPClient, :post, [_, _, _]})
+      assert_receive({Plausible.HTTPClient, :post, [_, _, _]})
+      assert_receive({Plausible.HTTPClient, :post, [_, _, _]})
+      assert_receive({Plausible.HTTPClient, :post, [_, _, _]})
+      assert_receive({Plausible.HTTPClient, :post, [_, _, _]})
     end
 
     test "retries HTTP request if the rows are empty", %{site: site} do
       httpoison =
-        HTTPoison
-        |> stub(:post, fn _url, _body, _headers, _opts ->
-          {:ok, %HTTPoison.Response{status_code: 200, body: @empty_response}}
+        HTTPClient
+        |> stub(:post, fn _url, _headers, _body ->
+          {:ok, %Finch.Response{status: 200, body: @empty_response}}
         end)
-        |> stub(:post, fn _url, _body, _headers, _opts ->
-          {:ok, %HTTPoison.Response{status_code: 200, body: @ok_response}}
+        |> stub(:post, fn _url, _headers, _body ->
+          {:ok, %Finch.Response{status: 200, body: @ok_response}}
         end)
 
       request = %{
@@ -109,8 +110,8 @@ defmodule Plausible.Google.ApiTest do
 
       Api.fetch_and_persist(site, request, http_client: httpoison, sleep_time: 0)
 
-      assert_receive({HTTPoison, :post, [_, _, _, _]})
-      assert_receive({HTTPoison, :post, [_, _, _, _]})
+      assert_receive({Plausible.HTTPClient, :post, [_, _, _]})
+      assert_receive({Plausible.HTTPClient, :post, [_, _, _]})
 
       assert imported_visitor_count(site) == 1
     end

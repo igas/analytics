@@ -1,5 +1,5 @@
 defmodule Plausible.Google.Api do
-  alias Plausible.Imported
+  alias Plausible.{Imported, HTTPClient}
   use Timex
   require Logger
 
@@ -28,12 +28,13 @@ defmodule Plausible.Google.Api do
   end
 
   def fetch_access_token(code) do
-    res =
-      HTTPoison.post!(
-        "https://www.googleapis.com/oauth2/v4/token",
-        "client_id=#{client_id()}&client_secret=#{client_secret()}&code=#{code}&grant_type=authorization_code&redirect_uri=#{redirect_uri()}",
-        "Content-Type": "application/x-www-form-urlencoded"
-      )
+    url = "https://www.googleapis.com/oauth2/v4/token"
+    headers = [{"Content-Type", "application/x-www-form-urlencoded"}]
+
+    body =
+      "client_id=#{client_id()}&client_secret=#{client_secret()}&code=#{code}&grant_type=authorization_code&redirect_uri=#{redirect_uri()}"
+
+    res = HTTPClient.post(url, headers, body)
 
     Jason.decode!(res.body)
   end
@@ -41,10 +42,10 @@ defmodule Plausible.Google.Api do
   def fetch_verified_properties(auth) do
     with {:ok, auth} <- refresh_if_needed(auth) do
       res =
-        HTTPoison.get!("https://www.googleapis.com/webmasters/v3/sites",
-          "Content-Type": "application/json",
-          Authorization: "Bearer #{auth.access_token}"
-        )
+        HTTPClient.get("https://www.googleapis.com/webmasters/v3/sites", [
+          {"Content-Type", "application/json"},
+          {"Authorization", "Bearer #{auth.access_token}"}
+        ])
 
       domains =
         Jason.decode!(res.body)
@@ -92,19 +93,23 @@ defmodule Plausible.Google.Api do
         ]
       end
 
-    res =
-      HTTPoison.post!(
-        "https://www.googleapis.com/webmasters/v3/sites/#{property}/searchAnalytics/query",
-        Jason.encode!(%{
-          startDate: Date.to_iso8601(query.date_range.first),
-          endDate: Date.to_iso8601(query.date_range.last),
-          dimensions: ["query"],
-          rowLimit: limit,
-          dimensionFilterGroups: filter_groups || %{}
-        }),
-        "Content-Type": "application/json",
-        Authorization: "Bearer #{auth.access_token}"
-      )
+    url = "https://www.googleapis.com/webmasters/v3/sites/#{property}/searchAnalytics/query"
+
+    headers = [
+      {"Content-Type", "application/json"},
+      {"Authorization", "Bearer #{auth.access_token}"}
+    ]
+
+    body =
+      Jason.encode!(%{
+        startDate: Date.to_iso8601(query.date_range.first),
+        endDate: Date.to_iso8601(query.date_range.last),
+        dimensions: ["query"],
+        rowLimit: limit,
+        dimensionFilterGroups: filter_groups || %{}
+      })
+
+    res = HTTPClient.post(url, headers, body)
 
     case res.status_code do
       200 ->
@@ -132,9 +137,9 @@ defmodule Plausible.Google.Api do
 
   def get_analytics_view_ids(token) do
     res =
-      HTTPoison.get!(
+      HTTPClient.get(
         "https://www.googleapis.com/analytics/v3/management/accounts/~all/webproperties/~all/profiles",
-        Authorization: "Bearer #{token}"
+        [{"Authorization", "Bearer #{token}"}]
       )
 
     case res.status_code do
@@ -186,14 +191,11 @@ defmodule Plausible.Google.Api do
       pageSize: 1
     }
 
-    res =
-      HTTPoison.post!(
-        "https://analyticsreporting.googleapis.com/v4/reports:batchGet",
-        Jason.encode!(%{reportRequests: [report]}),
-        [Authorization: "Bearer #{token}"],
-        timeout: 15_000,
-        recv_timeout: 15_000
-      )
+    url = "https://analyticsreporting.googleapis.com/v4/reports:batchGet"
+    body = Jason.encode!(%{reportRequests: [report]})
+    headers = [Authorization: "Bearer #{token}"]
+
+    res = HTTPClient.post(url, headers, body)
 
     case res.status_code do
       200 ->
@@ -325,20 +327,18 @@ defmodule Plausible.Google.Api do
   @max_attempts 5
   def fetch_and_persist(site, request, opts \\ []) do
     report_request = build_import_report_request(request)
-    http_client = Keyword.get(opts, :http_client, HTTPoison)
+    http_client = Keyword.get(opts, :http_client, HTTPClient)
     attempt = Keyword.get(opts, :attempt, 1)
     sleep_time = Keyword.get(opts, :sleep_time, 1000)
 
     res =
       http_client.post(
         "https://analyticsreporting.googleapis.com/v4/reports:batchGet",
-        Jason.encode!(%{reportRequests: [report_request]}),
         [Authorization: "Bearer #{request.access_token}"],
-        timeout: 30_000,
-        recv_timeout: 30_000
+        Jason.encode!(%{reportRequests: [report_request]})
       )
 
-    with {:ok, %HTTPoison.Response{status_code: 200, body: raw_body}} <- res,
+    with {:ok, %Finch.Response{status: 200, body: raw_body}} <- res,
          {:ok, body} <- Jason.decode(raw_body),
          report <- List.first(body["reports"]),
          {:ok, data} <- get_non_empty_rows(report) do
@@ -403,12 +403,13 @@ defmodule Plausible.Google.Api do
   end
 
   defp refresh_token(auth) do
-    res =
-      HTTPoison.post!(
-        "https://www.googleapis.com/oauth2/v4/token",
-        "client_id=#{client_id()}&client_secret=#{client_secret()}&refresh_token=#{auth.refresh_token}&grant_type=refresh_token&redirect_uri=#{redirect_uri()}",
-        "Content-Type": "application/x-www-form-urlencoded"
-      )
+    url = "https://www.googleapis.com/oauth2/v4/token"
+
+    body =
+      "client_id=#{client_id()}&client_secret=#{client_secret()}&refresh_token=#{auth.refresh_token}&grant_type=refresh_token&redirect_uri=#{redirect_uri()}"
+
+    headers = [{"Content-Type", "application/x-www-form-urlencoded"}]
+    res = HTTPClient.post(url, headers, body)
 
     body = Jason.decode!(res.body)
 
